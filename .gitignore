@@ -1,0 +1,45 @@
+.DS_Store
+
+# Environments
+.venv/
+venv/
+.envrc
+.uv-cache/
+
+# Secrets / local config
+.env
+.env.*
+secrets/
+
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pytype/
+.pyright/
+.basedpyright/
+
+# Packaging / builds
+build/
+dist/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Copias locales de notebooks (solución de referencia, no compartir/commitear)
+*-local.ipynb
+
+# Datos crudos y derivados (nunca se versionan, contienen o derivan de PII)
+db_files/
+db_files_sint/
+output/
+
+# Logs
+*.log
+
+# IDEs
+.idea/
+.vscode/
