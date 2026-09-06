@@ -36,6 +36,7 @@ dist/
 db_files/
 db_files_sint/
 output/
+output_v2/
 
 # Logs
 *.log
