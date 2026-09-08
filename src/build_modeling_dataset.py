@@ -1,22 +1,12 @@
 """
-build_modeling_dataset.py — TFM Grupo 1
+build_modeling_dataset.py
 
-Unifica los 3 datasets (claims, location, kpis_diario) en el dataset de
-modelado, SIN pre-aplanar el join en la fuente.
-
-El join claims↔KPIs es temporal (ventana de 7 días previos al claim) y se resuelve en código para evitar
-data leakage. La capa de fuente es intercambiable: lee desde los archivos
-locales (`db_files/`) o desde la base de datos MySQL del cliente, devolviendo
-en ambos casos los mismos 3 DataFrames normalizados.
+Unifica claims, location y kpis_diario en el dataset de modelado.
 
 Uso:
-    python src/build_modeling_dataset.py --grain weekly --source files
-    python src/build_modeling_dataset.py --grain daily  --source files
-    python src/build_modeling_dataset.py --source mysql   # requiere .env
-
-Salida:
-    output/modeling_dataset_weekly.parquet (grain semanal, default — ver entregables/pipeline.md)
-    output/modeling_dataset.parquet        (grain diario, legado)
+    python src/build_modeling_dataset.py --grain weekly  --source files
+    python src/build_modeling_dataset.py --grain monthly --source files
+    python src/build_modeling_dataset.py --grain daily   --source files
 """
 
 from __future__ import annotations
@@ -34,29 +24,17 @@ OUTPUT_PATH = (BASE_DIR / "output" / "modeling_dataset.parquet").resolve()
 OUTPUT_PATH_WEEKLY = (BASE_DIR / "output" / "modeling_dataset_weekly.parquet").resolve()
 OUTPUT_PATH_MONTHLY = (BASE_DIR / "output" / "modeling_dataset_monthly.parquet").resolve()
 
-# Ventana de agregados temporales de KPIs (días previos al claim).
 ROLLING_WINDOW_DAYS = 7
-# Ventana rolling para grain mensual — más ancha, coherente con el período que resume.
 ROLLING_WINDOW_DAYS_MONTHLY = 30
 
-# Ancla de semana para el grain semanal (domingo) — ver entregables/pipeline.md §0.
 WEEK_ANCHOR = "W-SUN"
 MONTH_ANCHOR = "M"
 
-# Claves que deben tratarse como string para no perder ceros a la izquierda.
 ID_COLS = ("user_id", "site_id")
 
 
-# ---------------------------------------------------------------------------
-# 1. Capa de fuente (pluggable): files | mysql
-# ---------------------------------------------------------------------------
-
 def _resolve_kpis_path(dir_path: Path) -> tuple[Path, str]:
-    """Localiza el archivo de KPIs y su separador.
-
-    El cliente entregaba `kpis_diario.txt` (tab); desde el dataset definitivo
-    entrega `kpis_diario.csv` (coma). Se prueba primero el formato nuevo.
-    """
+    """Devuelve la ruta del archivo de KPIs y su separador."""
     csv_path = dir_path / "kpis_diario.csv"
     if csv_path.exists():
         return csv_path, ","
@@ -64,12 +42,7 @@ def _resolve_kpis_path(dir_path: Path) -> tuple[Path, str]:
 
 
 def load_from_files(dir_path: Path = DB_FILES_DIR) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Lee los 3 datasets desde archivos locales con sus separadores/encoding.
-
-    - claims.csv     -> pipe `|`, UTF-8 con BOM (utf-8-sig)
-    - location.csv   -> coma, UTF-8
-    - kpis_diario.csv (o .txt legado) -> coma (o tab), UTF-8
-    """
+    """Lee claims, location y kpis desde archivos locales."""
     if not dir_path.exists():
         raise FileNotFoundError(f"Directorio no encontrado: {dir_path}")
 
@@ -80,8 +53,6 @@ def load_from_files(dir_path: Path = DB_FILES_DIR) -> Tuple[pd.DataFrame, pd.Dat
         encoding_errors="replace",
         low_memory=False,
     )
-    # Filtro defensivo: el cliente a veces entrega el export completo (todas las
-    # categorías) en vez de ya pre-filtrado a RED -- no asumir que viene filtrado.
     if "category_1" in claims.columns:
         claims = claims[claims["category_1"] == "RED"].copy()
     location = pd.read_csv(
@@ -103,33 +74,15 @@ def load_from_files(dir_path: Path = DB_FILES_DIR) -> Tuple[pd.DataFrame, pd.Dat
 
 
 def load_from_mysql() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Lee los 3 datasets desde la base de datos MySQL del cliente.
-
-    Credenciales por variables de entorno (.env):
-        MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DB
-
-    NOTA: requiere `sqlalchemy` y `pymysql` (aún no en dependencias).
-    Se espera que el cliente entregue las 3 tablas NORMALIZADAS. Si en su lugar
-    entrega una tabla de KPIs pre-aplanada con una columna `CLAIMS` (conteo total
-    por sitio×día), `build_target()` lo detectará y avisará: ese conteo no permite
-    separar RECLAMO de CONSULTA y rompe la construcción del target.
-    """
+    """Lee claims, location y kpis desde MySQL. No implementado."""
     raise NotImplementedError(
-        "Fuente MySQL pendiente de implementar. Requiere: \n"
-        "  1) deps: sqlalchemy + pymysql (uv add sqlalchemy pymysql)\n"
-        "  2) credenciales en .env: MYSQL_HOST/PORT/USER/PASSWORD/DB\n"
-        "  3) nombres de tabla confirmados con el cliente (claims/location/kpis_diario)\n"
-        "Esqueleto previsto:\n"
-        "    from sqlalchemy import create_engine\n"
-        "    url = f'mysql+pymysql://{user}:{pwd}@{host}:{port}/{db}'\n"
-        "    engine = create_engine(url)\n"
-        "    claims   = pd.read_sql('SELECT * FROM claims', engine)\n"
-        "    location = pd.read_sql('SELECT * FROM location', engine)\n"
-        "    kpis     = pd.read_sql('SELECT * FROM kpis_diario', engine)\n"
+        "Fuente MySQL pendiente. Requiere sqlalchemy + pymysql y credenciales "
+        "en .env (MYSQL_HOST/PORT/USER/PASSWORD/DB)."
     )
 
 
 def load_sources(source: str, data_dir: Path = DB_FILES_DIR) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Despacha la carga segun el origen elegido."""
     if source == "files":
         return load_from_files(data_dir)
     if source == "mysql":
@@ -137,38 +90,27 @@ def load_sources(source: str, data_dir: Path = DB_FILES_DIR) -> Tuple[pd.DataFra
     raise ValueError(f"Fuente desconocida: {source!r} (usar 'files' o 'mysql')")
 
 
-# ---------------------------------------------------------------------------
-# 2. Normalización de claves y tipos
-# ---------------------------------------------------------------------------
-
 def normalize(
     claims: pd.DataFrame, location: pd.DataFrame, kpis: pd.DataFrame
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """IDs a string (sin perder ceros), fechas a datetime truncadas a día."""
+    """Pasa los IDs a string y las fechas a datetime truncado a dia."""
     for df in (claims, location, kpis):
         for col in ID_COLS:
             if col in df.columns:
                 df[col] = df[col].astype("string").str.strip()
 
-    # Fecha del claim -> día (para cruzar con grano sitio×día de KPIs).
     claims["fecha_creacion"] = pd.to_datetime(claims["fecha_creacion"], errors="coerce")
     claims["dia"] = claims["fecha_creacion"].dt.normalize()
 
-    # FECHA es DD/MM/YYYY -- el parseo por defecto de pandas la confunde con MM/DD
-    # (ambiguo para día<=12) y deja fechas corridas/silenciosamente mal para el resto.
+    # FECHA viene en DD/MM/YYYY.
     kpis["FECHA"] = pd.to_datetime(kpis["FECHA"], format="%d/%m/%Y", errors="coerce")
     kpis["dia"] = kpis["FECHA"].dt.normalize()
 
     return claims, location, kpis
 
 
-# ---------------------------------------------------------------------------
-# 3. Validación de integridad referencial (gate)
-# ---------------------------------------------------------------------------
-
 def validate_integrity(claims: pd.DataFrame, location: pd.DataFrame, kpis: pd.DataFrame) -> None:
-    """Reporta cobertura de las claves de join. Detecta mapeos rotos por la
-    anonimización paralela (si cada tabla usó un mapeo distinto, no cruzan)."""
+    """Imprime la cobertura de las claves de join y aborta si alguna queda vacia."""
     claims_users = set(claims["user_id"].dropna())
     loc_users = set(location["user_id"].dropna())
     loc_sites = set(location["site_id"].dropna())
@@ -187,42 +129,21 @@ def validate_integrity(claims: pd.DataFrame, location: pd.DataFrame, kpis: pd.Da
           f"({len(matched_sites)}/{len(loc_sites)})")
 
     if not matched_users:
-        raise RuntimeError(
-            "Ningún user_id de claims cruza con location. "
-            "Posible mapeo de anonimización inconsistente entre tablas."
-        )
+        raise RuntimeError("Ningún user_id de claims cruza con location.")
     if not matched_sites:
-        raise RuntimeError(
-            "Ningún site_id de location cruza con kpis. "
-            "Posible mapeo de anonimización inconsistente entre tablas."
-        )
+        raise RuntimeError("Ningún site_id de location cruza con kpis.")
 
-
-# ---------------------------------------------------------------------------
-# 4. Target a nivel site_id × día (en código, no la columna CLAIMS del cliente)
-# ---------------------------------------------------------------------------
 
 def build_target(claims: pd.DataFrame, location: pd.DataFrame) -> pd.DataFrame:
-    """Construye el target agregando claims a `site_id × día`, desglosado por motivo.
-
-    Si la fuente entregó claims pre-aplanado (solo un conteo `CLAIMS` sin
-    `motivo_atencion`), aborta: no se puede separar RECLAMO del resto.
-    """
+    """Agrega claims a site_id x dia, desglosado por motivo de atencion."""
     if "motivo_atencion" not in claims.columns:
         raise RuntimeError(
-            "claims no tiene 'motivo_atencion'. Si la fuente entregó un conteo "
-            "agregado 'CLAIMS', no se puede construir el target es_reclamo_red. "
-            "Solicitar al cliente las claims crudas o el desglose por motivo."
+            "claims no tiene 'motivo_atencion': no se puede separar RECLAMO de CONSULTA."
         )
 
-    # Asignar site_id a cada claim vía location (user_id -> site_id).
     user_site = location[["user_id", "site_id"]].drop_duplicates(subset=["user_id"])
     cl = claims.merge(user_site, on="user_id", how="inner")
 
-    # En la extracción actual (claims filtrado a category_1='RED') motivo_atencion
-    # solo toma 2 valores: RECLAMO (2361) y CONSULTA (494). SOLICITUD existe en el
-    # sistema del cliente pero corresponde a nuevos requerimientos, no a categoría RED,
-    # por lo que no aparece aquí. El target usa solo RECLAMO.
     motivo = cl["motivo_atencion"].astype("string").str.upper().str.strip()
     cl = cl.assign(
         es_reclamo=(motivo == "RECLAMO").astype(int),
@@ -242,16 +163,8 @@ def build_target(claims: pd.DataFrame, location: pd.DataFrame) -> pd.DataFrame:
     return agg
 
 
-# ---------------------------------------------------------------------------
-# 5. Join temporal de KPIs sin leakage (rolling solo con días previos)
-# ---------------------------------------------------------------------------
-
 def attach_kpis(target: pd.DataFrame, kpis: pd.DataFrame) -> pd.DataFrame:
-    """Adjunta KPI del día + agregados rolling de 7 días PREVIOS (sin el día actual).
-
-    El `.shift(1)` antes del `.rolling()` garantiza que ningún agregado use el
-    día del claim ni días futuros -> evita data leakage.
-    """
+    """Adjunta el KPI del dia mas agregados rolling de 7 dias previos."""
     kpis = kpis.sort_values(["site_id", "dia"]).copy()
 
     rolling_specs = {
@@ -268,7 +181,6 @@ def attach_kpis(target: pd.DataFrame, kpis: pd.DataFrame) -> pd.DataFrame:
         shifted = grp[src_col].shift(1)
         kpis[new_col] = shifted.rolling(ROLLING_WINDOW_DAYS, min_periods=1).agg(how)
 
-    # degradacion = throughput del día / promedio 7d previos.
     if "THROUGHPUT_4G" in kpis.columns and "avg_THROUGHPUT_4G_7d" in kpis.columns:
         kpis["degradacion_THROUGHPUT_7d"] = (
             kpis["THROUGHPUT_4G"] / kpis["avg_THROUGHPUT_4G_7d"]
@@ -277,23 +189,10 @@ def attach_kpis(target: pd.DataFrame, kpis: pd.DataFrame) -> pd.DataFrame:
     return target.merge(kpis, on=["site_id", "dia"], how="left")
 
 
-# ---------------------------------------------------------------------------
-# 6. Grain sitio × semana (dataset canónico del MVP — ver entregables/pipeline.md §2)
-# ---------------------------------------------------------------------------
-
 def build_weekly_target(
     claims: pd.DataFrame, location: pd.DataFrame, week_anchor: str = WEEK_ANCHOR
 ) -> pd.DataFrame:
-    """Agrega claims a `site_id × semana`. Target principal = `n_reclamos_semana > 0`.
-
-    Si `claims` trae la columna `pronopro` (cliente la agregó 2026-07-14, cobertura
-    parcial ~11% de RECLAMO), también arma `es_reclamo_confirmado_semanal` =
-    RECLAMO validado como 'Procede' -- ground truth más estricto (menos ruido de
-    quejas no relacionadas a red), pero MUY disperso todavía para ser el target
-    principal: solo 109/2361 RECLAMO tienen pronopro='Procede'. Se deja como
-    columna adicional para validar la hipótesis (¿el modelo puntúa más alto los
-    reclamos confirmados?), no para reemplazar `es_reclamo_semanal`.
-    """
+    """Agrega claims a site_id x semana. Anade el target confirmado si hay pronopro."""
     user_site = location[["user_id", "site_id"]].drop_duplicates(subset=["user_id"])
     cl = claims.merge(user_site, on="user_id", how="inner")
 
@@ -311,7 +210,7 @@ def build_weekly_target(
         cl = cl.assign(es_reclamo_confirmado=(cl["es_reclamo"].astype(bool) & procede).astype(int))
         agg_specs["n_reclamos_confirmados_semana"] = ("es_reclamo_confirmado", "sum")
         cobertura = cl.loc[cl["es_reclamo"] == 1, "pronopro"].notna().mean()
-        print(f"Cobertura de PRONOPRO en RECLAMO: {cobertura:.1%} -- confirmar con cliente si se puede ampliar.")
+        print(f"Cobertura de PRONOPRO en RECLAMO: {cobertura:.1%}")
 
     agg = cl.groupby(["site_id", "semana"]).agg(**agg_specs).reset_index()
     agg["es_reclamo_semanal"] = (agg["n_reclamos_semana"] > 0).astype(int)
@@ -325,18 +224,7 @@ def build_weekly_kpis(
     week_anchor: str = WEEK_ANCHOR,
     window: int = ROLLING_WINDOW_DAYS,
 ) -> pd.DataFrame:
-    """Agregados rolling diarios leakage-safe, luego resumidos a `site_id × semana`.
-
-    El `.shift(1)` antes del `.rolling()` evita que el día actual entre en su
-    propia ventana; la agregación semanal solo resume esos valores diarios,
-    no introduce leakage adicional.
-
-    Probado (2026-07-13): agregado semanal nativo (promedio directo por semana
-    calendario, sin rolling diario) + lag de 1 semana, como alternativa a este
-    doble suavizado (rolling diario -> agregado semanal). Resultado prácticamente
-    idéntico (XGB AUC-PR 0.0259 vs 0.0264 actual) — no se adoptó, la señal débil
-    es del dataset, no del método de agregación.
-    """
+    """Calcula agregados rolling diarios y los resume a site_id x semana."""
     kpis = kpis.sort_values(["site_id", "dia"]).copy()
 
     rolling_specs = {
@@ -353,8 +241,6 @@ def build_weekly_kpis(
         kpis[new_col] = shifted.rolling(window, min_periods=1).agg(how)
 
     if "THROUGHPUT_4G" in kpis.columns and "avg_THP_4G_7d" in kpis.columns:
-        # replace(0, NaN) antes de dividir: THP promedio 0 en la ventana previa daría
-        # inf en vez de NaN, y dropna() más adelante no atrapa inf.
         kpis["degradacion_THP_7d"] = kpis["THROUGHPUT_4G"] / kpis["avg_THP_4G_7d"].replace(0, np.nan)
 
     kpis["semana"] = kpis["dia"].dt.to_period(week_anchor)
@@ -374,11 +260,7 @@ def build_weekly_kpis(
 def build_monthly_target(
     claims: pd.DataFrame, location: pd.DataFrame, month_anchor: str = MONTH_ANCHOR
 ) -> pd.DataFrame:
-    """Agrega claims a `site_id × mes calendario`. Target = `n_reclamos_mes > 0`.
-
-    Mismo criterio que `build_weekly_target` (RECLAMO por `motivo_atencion`,
-    + PRONOPRO si está disponible), a grano mensual.
-    """
+    """Agrega claims a site_id x mes. Anade el target confirmado si hay pronopro."""
     user_site = location[["user_id", "site_id"]].drop_duplicates(subset=["user_id"])
     cl = claims.merge(user_site, on="user_id", how="inner")
 
@@ -408,12 +290,7 @@ def build_monthly_kpis(
     month_anchor: str = MONTH_ANCHOR,
     window: int = ROLLING_WINDOW_DAYS_MONTHLY,
 ) -> pd.DataFrame:
-    """Agregados rolling diarios leakage-safe (ventana 30d), resumidos a `site_id × mes`.
-
-    Mismo mecanismo que `build_weekly_kpis` (`.shift(1)` antes de `.rolling()`)
-    pero con ventana más ancha, coherente con resumir a grano mensual. Sufijo
-    `_30d` en las columnas (no `_7d`) para que el nombre refleje la ventana real.
-    """
+    """Calcula agregados rolling diarios de 30 dias y los resume a site_id x mes."""
     kpis = kpis.sort_values(["site_id", "dia"]).copy()
 
     rolling_specs = {
@@ -449,13 +326,7 @@ def build_monthly_kpis(
 def build_monthly(
     source: str, output_path: Path = OUTPUT_PATH_MONTHLY, data_dir: Path = DB_FILES_DIR
 ) -> pd.DataFrame:
-    """Universo completo = site×mes, análogo a `build_weekly` pero a grano mensual.
-
-    Con ~6 meses de historia (ver `entregables/tasks-entrega3.md`), esto da
-    pocos períodos por sitio (~6-7) -- suficiente para comparar señal
-    site×mes vs site×semana, pero un split temporal train/test deja muy
-    pocos meses de test. Evaluar con cautela (ver notebook §6).
-    """
+    """Construye y escribe el dataset a grano site_id x mes."""
     claims, location, kpis = load_sources(source, data_dir)
     claims, location, kpis = normalize(claims, location, kpis)
     validate_integrity(claims, location, kpis)
@@ -486,13 +357,7 @@ def build_monthly(
 def build_weekly(
     source: str, output_path: Path = OUTPUT_PATH_WEEKLY, data_dir: Path = DB_FILES_DIR
 ) -> pd.DataFrame:
-    """Universo completo = site×semana con datos de red (kpis), no solo semanas con claim.
-
-    Partir de claims daría un dataset artificialmente positivo (solo incluiría
-    semanas donde ya hubo queja). El universo real son todas las semanas con
-    actividad de red por sitio; el target se une con LEFT JOIN y rellena 0
-    donde no hubo reclamo esa semana.
-    """
+    """Construye y escribe el dataset a grano site_id x semana."""
     claims, location, kpis = load_sources(source, data_dir)
     claims, location, kpis = normalize(claims, location, kpis)
     validate_integrity(claims, location, kpis)
@@ -508,8 +373,6 @@ def build_weekly(
         dataset[col] = dataset[col].fillna(0).astype(int)
     dataset["es_reclamo_semanal"] = (dataset["n_reclamos_semana"] > 0).astype(int)
     if "n_reclamos_confirmados_semana" in dataset.columns:
-        # Recalcular tras el fillna -- la versión de build_weekly_target solo
-        # cubría semanas con al menos un claim, no el universo completo.
         dataset["es_reclamo_confirmado_semanal"] = (dataset["n_reclamos_confirmados_semana"] > 0).astype(int)
 
     if "USERS_4G" in dataset.columns:
@@ -522,12 +385,8 @@ def build_weekly(
     return dataset
 
 
-# ---------------------------------------------------------------------------
-# Orquestación
-# ---------------------------------------------------------------------------
-
 def build(source: str, output_path: Path = OUTPUT_PATH) -> pd.DataFrame:
-    """Grain diario (legado) — mantenido por compatibilidad. Ver `build_weekly`."""
+    """Construye y escribe el dataset a grano site_id x dia."""
     claims, location, kpis = load_sources(source)
     claims, location, kpis = normalize(claims, location, kpis)
     validate_integrity(claims, location, kpis)
@@ -543,20 +402,21 @@ def build(source: str, output_path: Path = OUTPUT_PATH) -> pd.DataFrame:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Unifica datasets en dataset de modelado (site×semana o site×día).")
+    """Define los argumentos de linea de comandos."""
+    p = argparse.ArgumentParser(description="Unifica los datasets en el dataset de modelado.")
     p.add_argument("--source", choices=["files", "mysql"], default="files",
                    help="Origen de los datos (default: files).")
     p.add_argument("--grain", choices=["weekly", "monthly", "daily"], default="weekly",
-                   help="Grain de salida (default: weekly, ver entregables/pipeline.md).")
+                   help="Grano de salida (default: weekly).")
     p.add_argument("--output", type=Path, default=None,
-                   help="Ruta del parquet de salida (default según --grain).")
+                   help="Ruta del parquet de salida (default segun --grain).")
     p.add_argument("--data-dir", type=Path, default=DB_FILES_DIR,
-                   help="Directorio de datasets raw (default: db_files/). Útil para "
-                        "correr sobre datos alternativos, ej. db_files_sint/.")
+                   help="Directorio de datasets crudos (default: db_files/).")
     return p.parse_args()
 
 
 def main() -> None:
+    """Punto de entrada: construye el dataset del grano pedido."""
     args = parse_args()
     if args.grain == "weekly":
         build_weekly(args.source, args.output or OUTPUT_PATH_WEEKLY, args.data_dir)

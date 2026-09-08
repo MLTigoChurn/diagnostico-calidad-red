@@ -1,11 +1,8 @@
 """
-eda_diagnostico.py — EDA propio del TFM Grupo 1 (enfoque diagnóstico)
+eda_diagnostico.py
 
-Genera el EDA alineado con `entregables/eda-hallazgos.md`:
-- Target = RECLAMO a nivel sitio × día (proxy diagnóstico), NO el conteo CLAIMS aplanado.
-- Pregunta central: ¿a partir de qué umbral de cada KPI sube la tasa de queja?
-- Trata SITE_ID / user_id como IDENTIFICADORES (no se les calcula media/normalidad).
-- Usa los nombres reales del crudo (TB_*, no GB_*).
+Genera el analisis exploratorio con enfoque diagnostico: target RECLAMO a nivel
+sitio por dia, y umbral de cada KPI a partir del cual sube la tasa de queja.
 
 Salida (una carpeta por corrida, sellada con fecha y hora):
     output/eda/eda_<YYYY-MM-DD_HHMM>/

@@ -1,13 +1,10 @@
 """
-score_sites.py — TFM Grupo 1
+score_sites.py
 
-Job de scoring productivo: entrena XGBoost (grano mensual, target confirmado
-por PRONOPRO + feature thp_per_user, la combinación con mejor lift del
-proyecto) y genera el ranking accionable de sitios en riesgo.
+Entrena XGBoost a grano mensual y genera el ranking de sitios en riesgo.
 
-Prerrequisito: correr antes
+Prerrequisito:
     python src/build_modeling_dataset.py --grain monthly --source files
-para generar output/modeling_dataset_monthly.parquet.
 
 Uso:
     python src/score_sites.py
@@ -51,7 +48,6 @@ FEATURE_COLS = [
     "thp_per_user",
 ]
 
-# Umbrales de negocio (derivados del EDA, ver entregables/eda-hallazgos.md).
 AVA_THRESHOLD = 0.98
 DC_THRESHOLD = 0.02
 THP_THRESHOLD_MBP = 15.0
@@ -59,30 +55,22 @@ THP_THRESHOLD_MBP = 15.0
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 
-# ---------------------------------------------------------------------------
-# 1. Carga y feature engineering
-# ---------------------------------------------------------------------------
-
 def load_dataset(data_path: Path) -> pd.DataFrame:
+    """Lee el parquet mensual y deriva thp_per_user."""
     if not data_path.exists():
         raise FileNotFoundError(
             f"Parquet no encontrado: {data_path}. "
             "Ejecutar `python src/build_modeling_dataset.py --grain monthly --source files` primero."
         )
     df_monthly = pd.read_parquet(data_path)
-    # thp_per_user separa congestión por tráfico de degradación real,
-    # confusor señalado en entregables/eda-hallazgos.md §5.3.
     df_monthly["thp_per_user"] = df_monthly["avg_THP_4G_30d"] / df_monthly["USERS_4G"].replace(0, np.nan)
     return df_monthly
 
 
 def build_features(df_monthly: pd.DataFrame, test_cutoff: str) -> tuple[pd.DataFrame, ...]:
-    # Filas sin ventana rolling previa quedan con nulos en FEATURE_COLS -- no es
-    # missing real, es artefacto de .shift(1).rolling(). degradacion_THP_30d/
-    # thp_per_user pueden dar inf si el denominador es 0.
+    """Descarta filas sin features y parte el dataset en train y test por fecha."""
     df_model = df_monthly.replace([np.inf, -np.inf], np.nan).dropna(subset=FEATURE_COLS).copy()
 
-    # Split temporal -- nunca aleatorio en series de tiempo.
     mask_train = df_model[MONTH_COL] < test_cutoff
     df_train = df_model[mask_train].copy()
     df_test = df_model[~mask_train].copy()
@@ -95,21 +83,15 @@ def build_features(df_monthly: pd.DataFrame, test_cutoff: str) -> tuple[pd.DataF
     return df_model, df_train, df_test, X_train, y_train, X_test, y_test
 
 
-# ---------------------------------------------------------------------------
-# 2. Modelo (XGBoost + Optuna)
-# ---------------------------------------------------------------------------
-
 def train_xgboost(
     X_train: pd.DataFrame,
     y_train: pd.Series,
     random_state: int,
     n_trials: int,
 ) -> XGBClassifier:
+    """Busca hiperparametros con Optuna y devuelve el XGBoost entrenado."""
     scale_pos_weight = (y_train == 0).sum() / (y_train == 1).sum()
 
-    # CV interno (StratifiedKFold, no TimeSeriesSplit) solo reordena semanas ya
-    # vistas en train para elegir hiperparámetros -- el leakage temporal real
-    # se evita con el split train/test por TEST_CUTOFF_DATE, no acá.
     def objective(trial: optuna.Trial) -> float:
         params = dict(
             n_estimators=trial.suggest_int("n_estimators", 100, 400),
@@ -149,6 +131,7 @@ def train_xgboost(
 
 
 def metrics_at_k(y_true: Sequence[int], y_prob: Sequence[float], k: int) -> dict:
+    """Calcula TP, FP, precision y recall sobre las k alertas de mayor score."""
     order = np.argsort(-np.asarray(y_prob))
     top_k_true = np.asarray(y_true)[order][:k]
     tp = int(top_k_true.sum())
@@ -163,18 +146,15 @@ def metrics_at_k(y_true: Sequence[int], y_prob: Sequence[float], k: int) -> dict
     }
 
 
-# ---------------------------------------------------------------------------
-# 3. SHAP y clasificación de acción recomendada
-# ---------------------------------------------------------------------------
-
 def compute_shap_values(model_xgb: XGBClassifier, X_test: pd.DataFrame) -> np.ndarray:
+    """Devuelve la matriz de valores SHAP del modelo sobre el conjunto de prueba."""
     explainer = shap.TreeExplainer(model_xgb)
     shap_values = explainer(X_test)
     return shap_values.values if hasattr(shap_values, "values") else shap_values
 
 
 def clasifica_accion(shap_row: dict, signal_threshold: float) -> str:
-    """Acción recomendada según el driver SHAP dominante del sitio."""
+    """Devuelve la accion recomendada segun el driver SHAP dominante del sitio."""
     driver_dominante = max(shap_row, key=shap_row.get)
     valor_maximo_shap = shap_row[driver_dominante]
 
@@ -189,11 +169,8 @@ def clasifica_accion(shap_row: dict, signal_threshold: float) -> str:
         return "Monitoreo"
 
 
-# ---------------------------------------------------------------------------
-# 4. Segmentación de sitios (clustering)
-# ---------------------------------------------------------------------------
-
 def cluster_sites(df_model: pd.DataFrame, random_state: int) -> pd.DataFrame:
+    """Agrupa los sitios con K-Means y elige k por silhouette."""
     df_sites_agg = df_model.groupby(SITE_ID_COL)[FEATURE_COLS].mean().reset_index()
 
     scaler_cluster = StandardScaler()
@@ -218,6 +195,7 @@ def cluster_sites(df_model: pd.DataFrame, random_state: int) -> pd.DataFrame:
 
 
 def _etiqueta_perfil(row: pd.Series) -> str:
+    """Devuelve el perfil operativo del sitio segun sus KPI promedio."""
     if row["avg_AVA_4G_30d"] < 0.90:
         return "Crítico - disponibilidad severa"
     elif row["max_DC_V4G_30d"] > DC_THRESHOLD * 2:
@@ -231,6 +209,7 @@ def _etiqueta_perfil(row: pd.Series) -> str:
 
 
 def _umbrales_violados(row: pd.Series) -> str:
+    """Devuelve los umbrales de negocio que incumple la fila."""
     violados = []
     if row["avg_AVA_4G_30d"] < AVA_THRESHOLD:
         violados.append("AVA")
@@ -241,10 +220,6 @@ def _umbrales_violados(row: pd.Series) -> str:
     return ", ".join(violados) if violados else "ninguno"
 
 
-# ---------------------------------------------------------------------------
-# 5. Ranking accionable (output final)
-# ---------------------------------------------------------------------------
-
 def build_ranking(
     df_test: pd.DataFrame,
     X_test: pd.DataFrame,
@@ -253,6 +228,7 @@ def build_ranking(
     df_sites_clustered: pd.DataFrame,
     df_monthly: pd.DataFrame,
 ) -> pd.DataFrame:
+    """Arma el ranking por sitio con score, drivers, umbrales, accion y perfil."""
     signal_threshold = 0.1 * np.abs(shap_array).mean()
 
     df_ranking = df_test[[SITE_ID_COL]].reset_index(drop=True).copy()
@@ -278,7 +254,6 @@ def build_ranking(
     meses_riesgo = df_monthly.groupby(SITE_ID_COL)[TARGET_COL].sum().rename("meses_en_riesgo")
     df_ranking = df_ranking.merge(meses_riesgo, on=SITE_ID_COL, how="left")
 
-    # Deduplicar a nivel sitio: para cada site_id, la fila de mayor score_riesgo.
     df_ranking = (
         df_ranking
         .sort_values("score_riesgo", ascending=False)
@@ -288,22 +263,20 @@ def build_ranking(
     return df_ranking.sort_values("score_riesgo", ascending=False).reset_index(drop=True)
 
 
-# ---------------------------------------------------------------------------
-# 6. Orquestación
-# ---------------------------------------------------------------------------
-
 def parse_args() -> argparse.Namespace:
+    """Define los argumentos de linea de comandos."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--data", type=Path, default=DATA_MONTHLY_DEFAULT, help="Parquet mensual de entrada")
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR_DEFAULT, help="Carpeta de salida")
     parser.add_argument("--test-cutoff", default="2026-02-01", help="Fecha de corte train/test (YYYY-MM-DD)")
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument("--n-trials", type=int, default=50, help="Trials de Optuna para tuning de XGBoost")
-    parser.add_argument("--top-k", type=int, default=77, help="N de alertas para precision@top-N operacional")
+    parser.add_argument("--top-k", type=int, default=77, help="N de alertas para precision@top-N")
     return parser.parse_args()
 
 
 def main() -> None:
+    """Punto de entrada: entrena, evalua y escribe el ranking de sitios."""
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 

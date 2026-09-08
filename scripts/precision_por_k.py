@@ -1,11 +1,8 @@
 """
-precision_por_k.py — TFM Grupo 1
+precision_por_k.py
 
-Curva precision@k y lift@k del modelo final, sobre el mismo split que
-`src/score_sites.py` (grano mensual, target confirmado por PRONOPRO,
-corte 2026-02-01). Sirve para responder en la defensa por qué se reporta
-lift y no precision a secas: precision@k se mueve un factor 8 sin que el
-modelo cambie, y lift@k converge a 1,00x cuando k es todo el universo.
+Calcula la curva precision@k y lift@k del modelo final sobre el mismo split
+que `src/score_sites.py`.
 
 Uso:
     uv run python scripts/precision_por_k.py
@@ -37,6 +34,7 @@ def ic95(tp: int, k: int) -> tuple[float, float]:
 
 
 def main() -> None:
+    """Imprime la curva precision@k con sus intervalos de confianza."""
     df = ss.load_dataset(DATA)
     _, _, _, X_train, y_train, X_test, y_test = ss.build_features(df, CUTOFF)
 

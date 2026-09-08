@@ -2,7 +2,7 @@
 
 Este directorio **no es el pipeline de la entrega**. El entregable es `src/`, con salida en `output/`, y es el que produjo todas las cifras de la memoria y de la presentación.
 
-`src_v2/` existe para responder a las preguntas que el asesor del TFM planteó el 6 de septiembre de 2026 sobre si las variables usan información del propio periodo. En vez de argumentar si el sesgo era grande o pequeño, se reconstruyó el pipeline sin los defectos y se midió la diferencia.
+`src_v2/` existe para responder a la pregunta, planteada en la revisión del entregable final, de si las variables usan información del propio periodo. En vez de argumentar si el sesgo era grande o pequeño, se reconstruyó el pipeline sin los defectos y se midió la diferencia.
 
 ## Qué corrige
 
@@ -41,4 +41,4 @@ Las salidas van a `output_v2/`, que no se versiona por la misma razón que `outp
 
 ## Por qué no se rehízo la entrega con esto
 
-Los defectos se encontraron cuatro días antes de la defensa. Rehacer el pipeline habría cambiado el ranking, las figuras SHAP, los perfiles del clustering y los números financieros de toda la memoria. Se optó por documentar, medir y reportar la cifra corregida, dejando la corrección escrita y ejecutable. El análisis completo está en la documentación de trabajo del equipo.
+Los defectos se encontraron cuatro días antes de la defensa. Rehacer el pipeline habría cambiado el ranking, las figuras SHAP, los perfiles del clustering y los números financieros de toda la memoria. Se optó por documentar, medir y reportar la cifra corregida, dejando la corrección escrita y ejecutable.

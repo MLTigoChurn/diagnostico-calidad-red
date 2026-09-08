@@ -1,18 +1,8 @@
 """
-precision_por_perfil.py — TFM Grupo 1
+precision_por_perfil.py
 
-Responde la pregunta 6d de la guía de defensa: si el rendimiento medio del
-modelo esconde un subgrupo donde funciona peor.
-
-Cruza el ranking del modelo con el perfil operativo que asigna el clustering y
-reporta dos vistas:
-
-  A. Desempeño dentro de cada perfil (cada subgrupo ordenado por su cuenta).
-  B. Composición del top-N global, es decir dónde caen las alertas y las
-     falsas alarmas.
-
-No escribe nada en output/: solo imprime. Reproduce el modelo con
-RANDOM_STATE = 42, así que da el mismo resultado en cada corrida.
+Cruza el ranking del modelo con el perfil operativo del clustering y reporta
+el desempeno dentro de cada perfil y la composicion del top-N global.
 
 Uso:
     uv run python scripts/precision_por_perfil.py
@@ -65,7 +55,6 @@ def vista_a(scored: pd.DataFrame) -> pd.DataFrame:
             "tasa base %": round(100 * positivos / len(grupo), 2),
         }
         if positivos == 0:
-            # Sin positivos no hay AUC-PR ni precisión que calcular.
             fila["AUC-PR"] = None
             fila["precision@k"] = None
         else:

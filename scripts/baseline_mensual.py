@@ -1,6 +1,11 @@
-"""Linea base (reglas + regresion logistica) sobre el MISMO split que el modelo
-final: mensual, target confirmado (PRONOPRO), features con thp_per_user.
-Objetivo: dar un numero trazable para la slide 13, que hoy dice 1.7x sin fuente.
+"""
+baseline_mensual.py
+
+Calcula las lineas base (reglas de negocio y regresion logistica) sobre el
+mismo split que el modelo final.
+
+Uso:
+    uv run python scripts/baseline_mensual.py
 """
 import sys
 from pathlib import Path
@@ -11,7 +16,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import average_precision_score, precision_score, recall_score, f1_score
 
-BASE = Path("/Users/guillermoventura/Documents/Maestria/TFM/TFM-grupo1")
+BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE / "src"))
 import score_sites as ss
 
@@ -24,6 +29,7 @@ prev = yte.mean()
 print(f"test: {len(yte)} filas, {int(yte.sum())} positivos, prevalencia {prev:.4%}")
 
 def report(name, score, pred):
+    """Imprime AUC-PR, lift, precision, recall y F1 de un scorer."""
     ap = average_precision_score(yte, score)
     print(f"{name:34s} AUC-PR={ap:.4f}  lift={ap/prev:.2f}x  "
           f"P={precision_score(yte,pred,zero_division=0):.4f} "
@@ -31,7 +37,6 @@ def report(name, score, pred):
           f"F1={f1_score(yte,pred,zero_division=0):.4f}")
     return ap
 
-# 1. Reglas de negocio E2: score = numero de umbrales incumplidos (0-3)
 def rules(X):
     return ((X["avg_AVA_4G_30d"] < ss.AVA_THRESHOLD).astype(int)
             + (X["max_DC_V4G_30d"] > ss.DC_THRESHOLD).astype(int)
@@ -39,7 +44,6 @@ def rules(X):
 s_rules = rules(Xte)
 ap_rules = report("Reglas (linea base E2)", s_rules, (s_rules >= 1).astype(int))
 
-# 2. Regresion logistica balanceada
 lr = make_pipeline(StandardScaler(),
                    LogisticRegression(max_iter=2000, class_weight="balanced", random_state=42))
 lr.fit(Xtr, ytr)

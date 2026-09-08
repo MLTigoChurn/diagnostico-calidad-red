@@ -1,19 +1,9 @@
 """
-verificacion_hallazgos.py — TFM Grupo 1
+verificacion_hallazgos.py
 
-Comprueba empiricamente los hallazgos que salieron de la revision del
-entregable final: si las variables usan informacion del propio periodo, que
-aporta el modelo sobre baselines triviales, como se comporta el top-N por mes
-y si el score puede leerse como probabilidad. Todo sobre el mismo split que
-`src/score_sites.py`.
-
-Bloques:
-  A/B  modelo actual contra baselines triviales (ordenar por USERS_4G, etc.)
-  C    modelo sin las features que usan informacion del propio periodo
-  D    modelo con todas las features del mes anterior (anti-fuga real)
-  E    top-N global contra top-N por mes
-  F    calibracion: el score no es una probabilidad
-  G    umbral de disponibilidad estratificado por volumen de usuarios
+Comprueba sobre el split del modelo final si las variables usan informacion
+del propio periodo, que aporta el modelo frente a baselines triviales, como
+cambia el top-N calculado por mes y si el score puede leerse como probabilidad.
 
 Uso:
     uv run python scripts/verificacion_hallazgos.py
@@ -32,24 +22,22 @@ CUT = "2026-02-01"
 df = ss.load_dataset(BASE / "output" / "modeling_dataset_monthly_pronopro.parquet")
 
 def rep(nombre, y, s):
+    """Imprime AUC-PR y lift de un scorer y devuelve el lift."""
     prev = y.mean()
     ap = average_precision_score(y, s)
     print(f"{nombre:<42} AUC-PR={ap:.4f}  lift={ap/prev:.2f}x")
     return ap/prev
 
-# --- A. Modelo actual (referencia) -----------------------------------------
 _, tr, te, Xtr, ytr, Xte, yte = ss.build_features(df, CUT)
 m = ss.train_xgboost(Xtr, ytr, 42, 50)
 p_act = m.predict_proba(Xte)[:, 1]
 print("\n=== A. REFERENCIA Y BASELINES TRIVIALES (mismo test) ===")
 rep("XGBoost actual", yte, p_act)
 
-# --- B. Baselines triviales de control (hallazgo 2) -------------------------
 rep("Ordenar por USERS_4G solo", yte, Xte["USERS_4G"].to_numpy())
 rep("Ordenar por degradacion_THP_30d solo", yte, Xte["degradacion_THP_30d"].to_numpy())
 rep("Ordenar por avg_THP_4G_30d (invertido)", yte, -Xte["avg_THP_4G_30d"].to_numpy())
 
-# --- C. Modelo sin las 3 features contaminadas ------------------------------
 LIMPIAS = ["avg_AVA_4G_30d", "max_DC_V4G_30d", "avg_THP_4G_30d", "avg_CSFR_V4G_30d"]
 orig = ss.FEATURE_COLS[:]
 ss.FEATURE_COLS = LIMPIAS
@@ -59,7 +47,6 @@ print("\n=== C. SIN LAS FEATURES CONTAMINADAS (4 vars) ===")
 rep("XGBoost sin USERS/thp_per_user/degradacion", yte2, m2.predict_proba(Xte2)[:, 1])
 ss.FEATURE_COLS = orig
 
-# --- D. Features del mes ANTERIOR (sin informacion del propio periodo) ------
 d = df.sort_values(["site_id", "mes"]).copy()
 lag = d.groupby("site_id")[orig].shift(1)
 lag.columns = [c + "_lag1" for c in orig]
@@ -72,7 +59,6 @@ print(f"filas train={len(Xtr3)} test={len(Xte3)} positivos test={int(yte3.sum())
 rep("XGBoost con features de t-1", yte3, m3.predict_proba(Xte3)[:, 1])
 ss.FEATURE_COLS = orig
 
-# --- E. Top-N por mes vs top-N sobre todo el test (hallazgo 6) ----------------------
 print("\n=== E. TOP-N POR MES vs TOP-N GLOBAL (hallazgo 6) ===")
 r = te[["site_id", "mes"]].copy(); r["y"] = yte.to_numpy(); r["p"] = p_act
 prev = yte.mean()
@@ -86,7 +72,6 @@ for k in [15, 30]:
         t = sub.nlargest(k, "p")
         print(f"      {mes}: TP={int(t.y.sum())}/{k}  precision={t.y.mean():.4f}")
 
-# --- F. Calibracion: el score, es probabilidad? (hallazgo 6) -----------------------
 print("\n=== F. CALIBRACION DEL SCORE (hallazgo 6) ===")
 q = pd.qcut(p_act, 5, labels=False, duplicates="drop")
 cal = pd.DataFrame({"q": q, "p": p_act, "y": yte.to_numpy()}).groupby("q").agg(
@@ -95,7 +80,6 @@ print(cal.to_string())
 print(f"\nscore medio global={p_act.mean():.4f}  tasa real global={yte.mean():.4f}")
 FE = ss.FEATURE_COLS[:]
 
-# Baseline honesto: USERS_4G del mes ANTERIOR, contra el modelo D (t-1)
 d = df.sort_values(["site_id", "mes"]).copy()
 lag = d.groupby("site_id")[FE].shift(1); lag.columns = [c + "_lag1" for c in FE]
 d = pd.concat([d[["site_id", "mes", ss.TARGET_COL]], lag], axis=1)
@@ -107,7 +91,6 @@ for c in ["USERS_4G_lag1", "avg_AVA_4G_30d_lag1"]:
     print(f"{c:<28} (solo, t-1)  AUC-PR={ap:.4f}  lift={ap/prev:.2f}x")
 print(f"referencia: modelo con TODAS las features t-1 = 1.35x   |  prevalencia={prev:.4%}\n")
 
-# Q3: el umbral, confundido por volumen de usuarios?
 print("=== Q3. Tasa de reclamo por umbral, estratificada por volumen de usuarios ===")
 m = df.replace([np.inf,-np.inf], np.nan).dropna(subset=FE).copy()
 m["bajo_umbral_AVA"] = m.avg_AVA_4G_30d < ss.AVA_THRESHOLD

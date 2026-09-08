@@ -1,8 +1,8 @@
 """
-comparar_v1_v2.py — TFM Grupo 1
+comparar_v1_v2.py
 
-Compara el pipeline entregado (`src/`, `output/`) contra el corregido
-(`src_v2/`, `output_v2/`). No modifica ninguno de los dos.
+Compara el pipeline de `src/` contra el corregido de `src_v2/` sobre el mismo
+conjunto de prueba. No modifica ninguno de los dos.
 
 Uso:
     uv run python src_v2/comparar_v1_v2.py
@@ -29,6 +29,7 @@ DATOS = {
 
 
 def evaluar(nombre: str, ruta: Path, desde: str | None = None) -> dict:
+    """Entrena sobre un dataset y devuelve sus metricas y su ranking."""
     df = ss.load_dataset(ruta)
     if desde is not None:
         df = df[df["mes"].astype(str) >= desde]
@@ -50,6 +51,7 @@ def evaluar(nombre: str, ruta: Path, desde: str | None = None) -> dict:
 
 
 def main() -> None:
+    """Imprime la comparacion, el control por periodo y el solape de rankings."""
     res = [evaluar(n, r) for n, r in DATOS.items()]
 
     print("\n" + "=" * 78)
@@ -68,9 +70,6 @@ def main() -> None:
     print(f"Aporte del modelo sobre ordenar por usuarios:"
           f"  v1 {a['lift'] / a['lift_users']:.2f}x   v2 {b['lift'] / b['lift_users']:.2f}x")
 
-    # Control: v2 pierde octubre por construccion (no tiene mes previo), asi que
-    # entrena con 26% menos filas. Sin este control, la caida de lift mezcla el
-    # efecto de quitar la contaminacion con el de entrenar con menos datos.
     ctrl = evaluar("v1 sin octubre", DATOS["v1 (entregado)"], desde="2025-11")
     print("\n--- Control: mismo periodo de entrenamiento (nov a ene) en ambos ---")
     for r in [res[0], ctrl, res[1]]:
